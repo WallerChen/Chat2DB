@@ -1,7 +1,10 @@
-export * as Environment from './environment';
-export * as Database from './database';
-export * as appConfig from './appConfig';
-export * as theme from './theme';
-export * as common from './common';
-export * as tree from './tree';
+export * from './appConfig';
+export * from './common';
+export * from './database';
+export * from './environment';
+export * from './table';
+export * from './theme';
+export * from './tree';
+export * from './workspace';
+export * from './editTable';
 

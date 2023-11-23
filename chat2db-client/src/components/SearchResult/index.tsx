@@ -1,199 +1,222 @@
-import React, { memo, useEffect, useState, useRef } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useRef,
+  forwardRef,
+  ForwardedRef,
+  useImperativeHandle,
+  Fragment,
+  createContext,
+} from 'react';
 import classnames from 'classnames';
-import Tabs from '@/components/Tabs';
+import Tabs, { ITabItem } from '@/components/Tabs';
 import Iconfont from '@/components/Iconfont';
 import StateIndicator from '@/components/StateIndicator';
-import LoadingContent from '@/components/Loading/LoadingContent';
-import MonacoEditor from '@/components/Console/MonacoEditor';
-import { Button, DatePicker, Input, Table, Modal, message } from 'antd';
-import { StatusType, TableDataType } from '@/constants/table';
-import { formatDate } from '@/utils/date';
-import { IManageResultData, ITableHeaderItem } from '@/typings/database';
+// import Output from '@/components/Output';
+import { IManageResultData, IResultConfig } from '@/typings';
+import TableBox from './components/TableBox';
+import StatusBar from './components/StatusBar';
 import styles from './index.less';
+import EmptyImg from '@/assets/img/empty.svg';
+import i18n from '@/i18n';
+import sqlServer, { IExecuteSqlParams } from '@/service/sql';
+import { v4 as uuidV4 } from 'uuid';
+import { Spin } from 'antd';
 
 interface IProps {
   className?: string;
-  manageResultDataList: IManageResultData[];
+  sql?: string;
+  executeSqlParams: any;
 }
 
-interface DataType {
-  [key: string]: any;
+const defaultResultConfig: IResultConfig = {
+  pageNo: 1,
+  pageSize: 200,
+  total: 0,
+  hasNextPage: true,
+};
+
+export interface ISearchResultRef {
+  handleExecuteSQL: (sql: string) => void;
 }
 
-export default memo<IProps>(function SearchResult({ className, manageResultDataList = [] }) {
-  const [isUnfold, setIsUnfold] = useState(true);
-  const [currentTab, setCurrentTab] = useState('0');
+interface IContext {
+  // 这里不用ref的话，会导致切换时闪动
+  activeTabIdRef: React.MutableRefObject<null | string>
+}
+
+export const Context = createContext<IContext>({} as any);
+
+export default forwardRef((props: IProps, ref: ForwardedRef<ISearchResultRef>) => {
+  const { className, sql, executeSqlParams } = props;
+  const [resultDataList, setResultDataList] = useState<IManageResultData[]>();
+  const [tableLoading, setTableLoading] = useState(false);
+  const controllerRef = useRef<AbortController>();
+  const activeTabIdRef = useRef<null | string>(null);
 
   useEffect(() => {
-    setCurrentTab('0');
-  }, [manageResultDataList]);
+    if (sql) {
+      handleExecuteSQL(sql);
+    }
+  }, [sql]);
 
-  const renderStatus = (text: string) => {
+  useImperativeHandle(ref, () => ({
+    handleExecuteSQL,
+  }));
+
+  /**
+   * 执行SQL
+   * @param sql
+   */
+  const handleExecuteSQL = (_sql: string) => {
+    setTableLoading(true);
+
+    const executeSQLParams: IExecuteSqlParams = {
+      sql: _sql,
+      ...defaultResultConfig,
+      ...executeSqlParams,
+    };
+
+    controllerRef.current = new AbortController();
+    // 获取当前SQL的查询结果
+    sqlServer
+      .executeSql(executeSQLParams, {
+        signal: controllerRef.current.signal,
+      })
+      .then((res) => {
+        const sqlResult = res.map((_res) => ({
+          ..._res,
+          uuid: uuidV4(),
+        }));
+
+        setResultDataList(sqlResult);
+      })
+      .finally(() => {
+        setTableLoading(false);
+      });
+  };
+
+  const onChange = useCallback((uuid) => {
+    activeTabIdRef.current = uuid;
+  }, []);
+
+  const renderResult = (queryResultData) => {
+    function renderSuccessResult() {
+      const needTable = queryResultData?.headerList?.length > 1;
+      return (
+        <div className={styles.successResult}>
+          <div className={styles.successResultContent}>
+            {needTable ? (
+              <TableBox
+                tableBoxId={queryResultData.uuid}
+                key={queryResultData.uuid}
+                outerQueryResultData={queryResultData}
+                executeSqlParams={props.executeSqlParams}
+              />
+            ) : (
+              <div className={styles.updateCountBox}>
+                <div className={styles.updateCount}>
+                  {i18n('common.text.affectedRows', queryResultData.updateCount)}
+                </div>
+                <StatusBar
+                  dataLength={queryResultData?.dataList?.length}
+                  duration={queryResultData.duration}
+                  description={queryResultData.description}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
     return (
-      <div className={styles.tableStatus}>
-        <i className={classnames(styles.dot, { [styles.successDot]: text == StatusType.SUCCESS })}></i>
-        {text == StatusType.SUCCESS ? '成功' : '失败'}
-      </div>
+      <Fragment key={queryResultData.uuid}>
+        {queryResultData.success ? (
+          renderSuccessResult()
+        ) : (
+          <StateIndicator
+            className={styles.stateIndicator}
+            key={queryResultData.uuid}
+            state="error"
+            text={queryResultData.message}
+          />
+        )}
+      </Fragment>
     );
   };
 
-  function onChange(index: string) {
-    setCurrentTab(index);
-  }
-
-  const makerResultHeaderList = () => {
-    const list: any = [];
-    manageResultDataList?.map((item, index) => {
-      list.push({
-        label: (
-          <div key={index}>
-            <Iconfont
-              className={classnames(styles[item.success ? 'successIcon' : 'failIcon'], styles.statusIcon)}
-              code={item.success ? '\ue605' : '\ue87c'}
-            />
-            执行结果{index + 1}
-          </div>
+  const tabsList = useMemo(() => {
+    return resultDataList?.map((queryResultData, index) => {
+      return {
+        prefixIcon: (
+          <Iconfont
+            key={index}
+            className={classnames(styles[queryResultData.success ? 'successIcon' : 'failIcon'], styles.statusIcon)}
+            code={queryResultData.success ? '\ue605' : '\ue87c'}
+          />
         ),
-        key: index,
-      });
+        popover: queryResultData.originalSql,
+        label: i18n('common.text.executionResult', index + 1),
+        key: queryResultData.uuid!,
+        children: renderResult(queryResultData),
+      };
     });
-    return list;
+  }, [resultDataList]);
+
+  const onEdit = useCallback(
+    (type: 'add' | 'remove', data: ITabItem[]) => {
+      if (type === 'remove') {
+        const newResultDataList = resultDataList?.filter((d) => {
+          return data.findIndex((item) => item.key === d.uuid) === -1;
+        });
+        setResultDataList(newResultDataList);
+      }
+    },
+    [resultDataList],
+  );
+
+  const stopExecuteSql = () => {
+    controllerRef.current && controllerRef.current.abort();
+    setResultDataList([]);
+    setTableLoading(false);
   };
 
   return (
-    <div className={classnames(className, styles.box)}>
-      <div className={styles.resultHeader}>
-        <Tabs onChange={onChange} tabs={makerResultHeaderList()} />
+    <Context.Provider
+      value={{
+        activeTabIdRef: activeTabIdRef,
+      }}
+    >
+      <div className={classnames(className, styles.searchResult)}>
+        {tableLoading ? (
+          <div className={styles.tableLoading}>
+            <Spin />
+            <div className={styles.stopExecuteSql} onClick={stopExecuteSql}>
+              {i18n('common.button.cancelRequest')}
+            </div>
+          </div>
+        ) : (
+          <>
+            {tabsList?.length ? (
+              <Tabs
+                hideAdd
+                className={styles.tabs}
+                onChange={onChange as any}
+                onEdit={onEdit as any}
+                items={tabsList}
+                concealTabHeader={tabsList.length === 1}
+              />
+            ) : (
+              <div className={styles.noData}>
+                <img src={EmptyImg} />
+                <p>{i18n('common.text.noData')}</p>
+              </div>
+            )}
+          </>
+        )}
       </div>
-      <div className={styles.resultContent}>
-        <LoadingContent data={manageResultDataList} handleEmpty>
-          {manageResultDataList.map((item, index) => {
-            if (item.success) {
-              return (
-                <TableBox
-                  key={index}
-                  className={classnames({ [styles.cursorTableBox]: index + '' == currentTab })}
-                  data={item}
-                  headerList={item.headerList}
-                  dataList={item.dataList}
-                ></TableBox>
-              );
-            } else {
-              return <StateIndicator key={index} state="error" text={item.message}></StateIndicator>;
-            }
-          })}
-        </LoadingContent>
-      </div>
-    </div>
+    </Context.Provider>
   );
 });
-
-interface ITableProps {
-  headerList: ITableHeaderItem[];
-  dataList: string[][];
-  className?: string;
-  data: IManageResultData;
-}
-
-interface IViewTableCellData {
-  name: string;
-  value: any;
-}
-
-export function TableBox(props: ITableProps) {
-  const { headerList, dataList, className, data, ...rest } = props;
-  const [columns, setColumns] = useState<any>();
-  const [tableData, setTableData] = useState<any>();
-  const [viewTableCellData, setViewTableCellData] = useState<IViewTableCellData | null>(null);
-
-  function viewTableCell(data: IViewTableCellData) {
-    setViewTableCellData(data);
-  }
-
-  function copyTableCell(data: IViewTableCellData) {
-    navigator.clipboard.writeText(data?.value || viewTableCellData?.value);
-    message.success('复制成功');
-  }
-
-  function handleCancel() {
-    setViewTableCellData(null);
-  }
-
-  useEffect(() => {
-    if (!headerList?.length) {
-      return;
-    }
-    const columns: any = headerList?.map((item: any, index) => {
-      const data = {
-        title: item.name,
-        dataIndex: item.name,
-        key: item.name,
-        type: item.dataType,
-        sorter: (a: any, b: any) => a[item.name] - b[item.name],
-        render: (value: any) => (
-          <div className={styles.tableItem}>
-            <div className={styles.tableHoverBox}>
-              <Iconfont code="&#xe606;" onClick={viewTableCell.bind(null, { name: item.name, value })} />
-              <Iconfont code="&#xeb4e;" onClick={copyTableCell.bind(null, { name: item.name, value })} />
-            </div>
-            {value}
-          </div>
-        ),
-      };
-      return data;
-    });
-    setColumns(columns);
-  }, [headerList]);
-
-  useEffect(() => {
-    if (!columns?.length) return;
-    const tableData = dataList?.map((item, rowIndex) => {
-      const rowData: any = {};
-      item.map((i: string | null, index: number) => {
-        const { dataType: type } = headerList[index] || {};
-        // console.log('headerList[rowIndex]', headerList[rowIndex]);
-        if (type === TableDataType.DATETIME && i) {
-          rowData[columns[index].title] = formatDate(i, 'yyyy-MM-dd hh:mm:ss');
-        } else if (i === null) {
-          rowData[columns[index].title] = '[null]';
-        } else {
-          rowData[columns[index].title] = i;
-        }
-      });
-      rowData.key = rowIndex;
-      return rowData;
-    });
-
-    setTableData(tableData);
-  }, [columns]);
-
-  return (
-    <div {...rest} className={classnames(className, styles.tableBox)}>
-      {dataList !== null ? (
-        <Table bordered pagination={false} columns={columns} dataSource={tableData} size="small" />
-      ) : (
-        <StateIndicator state="success" text="执行成功"/>
-      )}
-      <Modal
-        title={viewTableCellData?.name}
-        open={!!viewTableCellData?.name}
-        onCancel={handleCancel}
-        width="60vw"
-        maskClosable={false}
-        footer={
-          <>
-            {
-              <Button onClick={copyTableCell.bind(null, viewTableCellData!)} className={styles.cancel}>
-                复制
-              </Button>
-            }
-          </>
-        }
-      >
-        <div className={styles.monacoEditor}>
-          <MonacoEditor value={viewTableCellData?.value} readOnly={true} id="view_table-Cell_data"></MonacoEditor>
-        </div>
-      </Modal>
-    </div>
-  );
-}

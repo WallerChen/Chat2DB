@@ -5,4 +5,7 @@ export interface INavItem {
   icon: string;
   component?: React.ReactNode;
   openBrowser?: string;
+  iconFontSize?: number;
+  isLoad: boolean;
+  name: string;
 }

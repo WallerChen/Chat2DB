@@ -1,24 +1,25 @@
 package ai.chat2db.spi.util;
 
+import java.sql.*;
+import java.text.Collator;
+import java.util.*;
+
+import ai.chat2db.spi.model.KeyValue;
+import com.alibaba.druid.DbType;
+
 import ai.chat2db.spi.config.DriverConfig;
-import cn.hutool.core.date.DateUtil;
 import ai.chat2db.spi.enums.DataTypeEnum;
 import ai.chat2db.spi.model.DataSourceConnect;
 import ai.chat2db.spi.model.SSHInfo;
 import ai.chat2db.spi.sql.IDriverManager;
-import ai.chat2db.spi.sql.SSHManager;
-import com.alibaba.druid.DbType;
-import com.jcraft.jsch.JSchException;
+import ai.chat2db.spi.ssh.SSHManager;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 import com.jcraft.jsch.Session;
 import lombok.extern.slf4j.Slf4j;
-
-import java.sql.*;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
-import java.util.Locale;
-import java.util.Map;
+import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.springframework.lang.Nullable;
 
 /**
  * jdbc工具类
@@ -28,17 +29,7 @@ import java.util.Map;
 @Slf4j
 public class JdbcUtils {
 
-    private static final String DEFAULT_DATETIME_PATTERN = "yyyy-MM-dd HH:mm:ss.SSS";
-    private static final DateTimeFormatter DEFAULT_DATETIME_FORMAT = DateTimeFormatter
-            .ofPattern(DEFAULT_DATETIME_PATTERN, Locale.getDefault())
-            .withZone(ZoneId.systemDefault());
-
-    private static final DateTimeFormatter DEFAULT_DATE_FORMAT = DateTimeFormatter
-            .ofPattern("yyyy-MM-dd", Locale.getDefault())
-            .withZone(ZoneId.systemDefault());
-    private static final DateTimeFormatter DEFAULT_DATETIME_TZ_FORMAT = DateTimeFormatter
-            .ofPattern("yyyy-MM-dd HH:mm:ss.SSS Z", Locale.getDefault())
-            .withZone(ZoneId.systemDefault());
+    private static final long MAX_RESULT_SIZE = 256 * 1024;
 
     /**
      * 获取德鲁伊的的数据库类型
@@ -140,60 +131,6 @@ public class JdbcUtils {
     }
 
     /**
-     * 获取一个返回值
-     *
-     * @param rs
-     * @param index
-     * @return
-     * @throws SQLException
-     */
-    public static String getResultSetValue(ResultSet rs, int index) throws SQLException {
-        Object obj = rs.getObject(index);
-        if (obj == null) {
-            return null;
-        }
-
-        if (obj instanceof Blob blob) {
-            return "(BLOB " + blob.length() + ")";
-        }
-        if (obj instanceof Clob clob) {
-            return "(CLOB " + clob.length() + ")";
-        }
-        if (obj instanceof Timestamp timestamp) {
-            return DateUtil.format(timestamp, DEFAULT_DATETIME_FORMAT);
-        }
-
-        String className = obj.getClass().getName();
-        if ("oracle.sql.TIMESTAMP".equals(className) || "oracle.sql.TIMESTAMPTZ".equals(className)) {
-            return DateUtil.format(rs.getTimestamp(index), DEFAULT_DATETIME_TZ_FORMAT);
-        }
-        if (className.startsWith("oracle.sql.DATE")) {
-            String metaDataClassName = rs.getMetaData().getColumnClassName(index);
-            if ("java.sql.Timestamp".equals(metaDataClassName) || "oracle.sql.TIMESTAMP".equals(metaDataClassName)) {
-                return DateUtil.format(rs.getTimestamp(index), DEFAULT_DATETIME_FORMAT);
-            } else {
-                return DateUtil.format(rs.getDate(index), DEFAULT_DATETIME_FORMAT);
-            }
-        }
-        if (obj instanceof Date date) {
-            if ("java.sql.Timestamp".equals(rs.getMetaData().getColumnClassName(index))) {
-                return DateUtil.format(rs.getDate(index), DEFAULT_DATETIME_FORMAT);
-            }
-            return DateUtil.format(date, DEFAULT_DATETIME_FORMAT);
-        }
-        if (obj instanceof LocalDateTime localDateTime) {
-            return localDateTime.toString();
-        }
-        if (obj instanceof LocalDate localDate) {
-            return localDate.toString();
-        }
-        if (obj instanceof Number) {
-            return obj.toString();
-        }
-        return obj.toString();
-    }
-
-    /**
      * 测试数据库连接
      *
      * @param url      数据库连接
@@ -213,6 +150,8 @@ public class JdbcUtils {
         // 加载驱动
         try {
             if (ssh.isUse()) {
+                ssh.setRHost(host);
+                ssh.setRPort(port);
                 session = SSHManager.getSSHSession(ssh);
                 url = url.replace(host, "127.0.0.1").replace(port, ssh.getLocalPort());
             }
@@ -228,6 +167,7 @@ public class JdbcUtils {
                 t = t.getCause();
             }
             dataSourceConnect.setMessage(t.getMessage());
+            dataSourceConnect.setErrorDetail(ExceptionUtils.getErrorInfoFromException(t));
             return dataSourceConnect;
         } finally {
             if (connection != null) {
@@ -239,14 +179,122 @@ public class JdbcUtils {
             }
             if (session != null) {
                 try {
-                    session.delPortForwardingL(Integer.parseInt(ssh.getLocalPort()));
-                } catch (JSchException e) {
+                    if (StringUtils.isNotBlank(ssh.getLocalPort())) {
+                        session.delPortForwardingL(Integer.parseInt(ssh.getLocalPort()));
+                    }
+                    session.disconnect();
+                } catch (Exception e) {
+
                 }
-                session.disconnect();
             }
         }
         dataSourceConnect.setDescription("成功");
         return dataSourceConnect;
+    }
+
+    public static void closeResultSet(@Nullable ResultSet rs) {
+        if (rs != null) {
+            try {
+                rs.close();
+            } catch (SQLException var2) {
+                log.trace("Could not close JDBC ResultSet", var2);
+            } catch (Throwable var3) {
+                log.trace("Unexpected exception on closing JDBC ResultSet", var3);
+            }
+        }
+
+    }
+
+    public static void setDriverDefaultProperty(DriverConfig driverConfig) {
+        if(driverConfig == null){
+            return;
+        }
+        List<KeyValue> defaultKeyValues = driverConfig.getExtendInfo();
+        Map<String, KeyValue> valueMap = Maps.newHashMap();
+        if (!CollectionUtils.isEmpty(defaultKeyValues)) {
+            for (KeyValue keyValue : defaultKeyValues) {
+                if (keyValue == null || StringUtils.isBlank(keyValue.getKey())) {
+                    continue;
+                }
+                valueMap.put(keyValue.getKey(), keyValue);
+            }
+        }
+        try {
+            DriverPropertyInfo[] propertyInfos = IDriverManager.getProperty(driverConfig);
+            if (propertyInfos == null) {
+                return;
+            }
+            for (int i = 0; i < propertyInfos.length; i++) {
+                DriverPropertyInfo propertyInfo = propertyInfos[i];
+                if (propertyInfo == null) {
+                    continue;
+                }
+                KeyValue keyValue = valueMap.get(propertyInfo.name);
+                if (keyValue != null) {
+                    String[] choices = propertyInfo.choices;
+                    if (CollectionUtils.isEmpty(keyValue.getChoices()) && choices != null && choices.length > 0) {
+                        keyValue.setChoices(Lists.newArrayList(choices));
+                    }
+                } else {
+                    keyValue = new KeyValue();
+                    keyValue.setKey(propertyInfo.name);
+                    keyValue.setValue(propertyInfo.value);
+                    keyValue.setRequired(propertyInfo.required);
+                    String[] choices = propertyInfo.choices;
+                    if (choices != null && choices.length > 0) {
+                        keyValue.setChoices(Lists.newArrayList(choices));
+                    }
+                    valueMap.put(keyValue.getKey(), keyValue);
+                }
+            }
+            if (!valueMap.isEmpty()) {
+                Comparator comparator = Collator.getInstance(Locale.ENGLISH);
+                List<KeyValue> result = new ArrayList<>(valueMap.values());
+                Collections.sort(result, (o1, o2) -> comparator.compare(o1.getKey(), o2.getKey()));
+                driverConfig.setExtendInfo(result);
+            }
+        } catch (SQLException e) {
+            log.error("get property error:", e);
+        }
+    }
+
+    public static void removePropertySameAsDefault(DriverConfig driverConfig) {
+        if(driverConfig == null){
+            return;
+        }
+        List<KeyValue> customValue = driverConfig.getExtendInfo();
+        if (CollectionUtils.isEmpty(customValue)) {
+            return ;
+        }
+        Map<String, String> map = Maps.newHashMap();
+        List<KeyValue> result = new ArrayList<>();
+        try {
+            DriverPropertyInfo[] propertyInfos = IDriverManager.getProperty(driverConfig);
+            if (propertyInfos == null) {
+                return ;
+            }
+            for (int i = 0; i < propertyInfos.length; i++) {
+                DriverPropertyInfo propertyInfo = propertyInfos[i];
+                if (propertyInfo == null) {
+                    continue;
+                }
+                map.put(propertyInfo.name, propertyInfo.value);
+            }
+            for (KeyValue keyValue : customValue) {
+                if (keyValue == null || StringUtils.isBlank(keyValue.getKey())) {
+                    continue;
+                }
+                String value = map.get(keyValue.getKey());
+                if (!StringUtils.equals(value, keyValue.getValue())) {
+                    result.add(keyValue);
+                }
+            }
+            Comparator comparator = Collator.getInstance(Locale.ENGLISH);
+            Collections.sort(result, (o1, o2) -> comparator.compare(o1.getKey(), o2.getKey()));
+            driverConfig.setExtendInfo(result);
+        } catch (SQLException e) {
+
+        }
     }
 
 }

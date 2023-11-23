@@ -2,12 +2,12 @@ package ai.chat2db.server.web.api.controller.data.source.request;
 
 import java.util.List;
 
+import ai.chat2db.spi.config.DriverConfig;
 import jakarta.validation.constraints.NotNull;
 
 import ai.chat2db.spi.model.KeyValue;
 import ai.chat2db.spi.model.SSHInfo;
 import ai.chat2db.spi.model.SSLInfo;
-import ai.chat2db.server.tools.base.enums.EnvTypeEnum;
 
 import lombok.Data;
 
@@ -56,7 +56,10 @@ public class DataSourceUpdateRequest {
      */
     private String envType;
 
-
+    /**
+     * 环境id
+     */
+    private Integer environmentId;
 
     /**
      * host
@@ -98,4 +101,19 @@ public class DataSourceUpdateRequest {
      * 扩展信息
      */
     private List<KeyValue> extendInfo;
+
+    /**
+     * 驱动配置
+     */
+    private DriverConfig driverConfig;
+
+    /**
+     * 服务名称
+     */
+    private String serviceName;
+
+    /**
+     * 服务类型
+     */
+    private String serviceType;
 }

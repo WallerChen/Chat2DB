@@ -1,22 +1,29 @@
 package ai.chat2db.server.domain.core.converter;
 
 import java.util.List;
+import java.util.Map;
 
 import ai.chat2db.server.domain.api.model.DataSource;
-import ai.chat2db.server.domain.api.param.DataSourceTestParam;
-import ai.chat2db.server.domain.core.util.DesUtil;
-import ai.chat2db.server.domain.api.param.ConsoleCreateParam;
 import ai.chat2db.server.domain.api.param.ConsoleConnectParam;
-import ai.chat2db.server.domain.api.param.DataSourceCreateParam;
-import ai.chat2db.server.domain.api.param.DataSourcePreConnectParam;
-import ai.chat2db.server.domain.api.param.DataSourceUpdateParam;
+import ai.chat2db.server.domain.api.param.ConsoleCreateParam;
+import ai.chat2db.server.domain.api.param.datasource.DataSourceCreateParam;
+import ai.chat2db.server.domain.api.param.datasource.DataSourcePreConnectParam;
+import ai.chat2db.server.domain.api.param.datasource.DataSourceSelector;
+import ai.chat2db.server.domain.api.param.datasource.DataSourceTestParam;
+import ai.chat2db.server.domain.api.param.datasource.DataSourceUpdateParam;
+import ai.chat2db.server.domain.api.service.DataSourceService;
+import ai.chat2db.server.domain.core.util.DesUtil;
 import ai.chat2db.server.domain.repository.entity.DataSourceDO;
-
+import ai.chat2db.server.tools.common.util.EasyCollectionUtils;
+import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
+import org.mapstruct.MappingTarget;
 import org.mapstruct.Mappings;
+import org.springframework.context.annotation.Lazy;
 
 /**
  * @author moji
@@ -26,6 +33,10 @@ import org.mapstruct.Mappings;
 @Slf4j
 @Mapper(componentModel = "spring")
 public abstract class DataSourceConverter {
+
+    @Resource
+    @Lazy
+    private DataSourceService dataSourceService;
 
     /**
      * 参数转换
@@ -42,6 +53,9 @@ public abstract class DataSourceConverter {
     @Mapping(target = "extendInfo",
         expression = "java(param.getExtendInfo()==null?null: com.alibaba.fastjson2.JSON.toJSONString(param"
             + ".getExtendInfo()))")
+    @Mapping(target = "driverConfig",
+        expression = "java(param.getDriverConfig()==null?null: com.alibaba.fastjson2.JSON.toJSONString(param"
+            + ".getDriverConfig()))")
     public abstract DataSourceDO param2do(DataSourceCreateParam param);
 
     /**
@@ -114,7 +128,10 @@ public abstract class DataSourceConverter {
             expression = "java(param.getSsl()==null?null: com.alibaba.fastjson2.JSON.toJSONString(param.getSsl()))"),
         @Mapping(target = "extendInfo",
             expression = "java(param.getExtendInfo()==null?null: com.alibaba.fastjson2.JSON.toJSONString(param"
-                + ".getExtendInfo()))")
+                + ".getExtendInfo()))"),
+        @Mapping(target = "driverConfig",
+            expression = "java(param.getDriverConfig()==null?null: com.alibaba.fastjson2.JSON.toJSONString(param"
+                + ".getDriverConfig()))")
     })
     public abstract DataSourceDO param2do(DataSourceUpdateParam param);
 
@@ -155,8 +172,15 @@ public abstract class DataSourceConverter {
             "java(com.alibaba.fastjson2.JSON.parseObject(dataSourceDO.getSsl(),ai.chat2db.spi"
                 + ".model.SSLInfo"
                 + ".class))")
+    @Mapping(target = "driverConfig",
+        expression =
+            "java(com.alibaba.fastjson2.JSON.parseObject(dataSourceDO.getDriverConfig(),ai.chat2db.spi.config"
+                + ".DriverConfig"
+                + ".class))")
     @Mapping(target = "extendInfo",
-        expression = "java(com.alibaba.fastjson2.JSON.parseArray(dataSourceDO.getExtendInfo(),KeyValue.class))")
+        expression = "java(com.alibaba.fastjson2.JSON.parseArray(dataSourceDO.getExtendInfo(),ai.chat2db.spi.model"
+            + ".KeyValue.class))")
+    @Mapping(target = "environment.id", source = "environmentId")
     public abstract DataSource do2dto(DataSourceDO dataSourceDO);
 
     /**
@@ -166,4 +190,39 @@ public abstract class DataSourceConverter {
      * @return
      */
     public abstract List<DataSource> do2dto(List<DataSourceDO> dataSourceDOList);
+
+    /**
+     * Fill in detailed information
+     *
+     * @param list
+     */
+    public void fillDetail(List<DataSource> list) {
+        fillDetail(list, null);
+    }
+
+    /**
+     * Fill in detailed information
+     *
+     * @param list
+     */
+    public void fillDetail(List<DataSource> list, DataSourceSelector selector) {
+        if (CollectionUtils.isEmpty(list)) {
+            return;
+        }
+        List<Long> idList = EasyCollectionUtils.toList(list, DataSource::getId);
+        List<DataSource> queryList = dataSourceService.listQuery(idList, selector).getData();
+        Map<Long, DataSource> queryMap = EasyCollectionUtils.toIdentityMap(queryList, DataSource::getId);
+        for (DataSource data : list) {
+            if (data == null || data.getId() == null) {
+                continue;
+            }
+            DataSource query = queryMap.get(data.getId());
+            add(data, query);
+        }
+    }
+
+    @Mappings({
+        @Mapping(target = "id", ignore = true),
+    })
+    public abstract void add(@MappingTarget DataSource target, DataSource source);
 }

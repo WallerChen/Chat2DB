@@ -36,4 +36,14 @@ public class OperationQueryRequest extends PageQueryRequest {
      * ddl语句状态:DRAFT/RELEASE
      */
     private String status;
+
+    /**
+     * orderBy modify time desc
+     */
+    private Boolean orderByDesc;
+
+    /**
+     * operation type
+     */
+    private String operationType;
 }

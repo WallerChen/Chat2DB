@@ -1,5 +1,4 @@
 target/
-!.mvn/com.alibaba.grow.common.wrapper/maven-com.alibaba.grow.common.wrapper.jar
 rebel.xml
 rebel-remote.xml
 .gradle
@@ -28,3 +27,4 @@ nbdist/
 
 ## 前端打包生成的代码 不用提交到github,
 /chat2db-server-start/src/main/resources/static/front/
+/chat2db-server-start/src/main/resources/thymeleaf/

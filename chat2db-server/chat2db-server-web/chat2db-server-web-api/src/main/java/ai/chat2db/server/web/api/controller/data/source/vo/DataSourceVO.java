@@ -2,10 +2,10 @@ package ai.chat2db.server.web.api.controller.data.source.vo;
 
 import java.util.List;
 
+import ai.chat2db.server.common.api.controller.vo.SimpleEnvironmentVO;
+import ai.chat2db.spi.config.DriverConfig;
 import ai.chat2db.spi.model.KeyValue;
 import ai.chat2db.spi.model.SSHInfo;
-import ai.chat2db.spi.model.SSLInfo;
-
 import lombok.Data;
 
 /**
@@ -37,6 +37,15 @@ public class DataSourceVO {
     private String user;
 
     /**
+     * password
+     */
+    private String password;
+
+    /**
+     * 认证类型
+     */
+    private String authenticationType;
+    /**
      * 连接类型
      */
     private String type;
@@ -61,10 +70,10 @@ public class DataSourceVO {
      */
     private SSHInfo ssh;
 
-    /**
-     * ssh
-     */
-    private SSLInfo ssl;
+    ///**
+    // * ssh
+    // */
+    //private SSLInfo ssl;
 
     /**
      * sid
@@ -87,4 +96,46 @@ public class DataSourceVO {
      */
     private List<KeyValue> extendInfo;
 
+    /**
+     * 驱动配置
+     */
+    private DriverConfig driverConfig;
+
+    /**
+     * 环境id
+     */
+    private Long environmentId;
+
+    /**
+     * 环境
+     */
+    private SimpleEnvironmentVO environment;
+
+    /**
+     * 连接类型
+     *
+     * @see ai.chat2db.server.domain.api.enums.DataSourceKindEnum
+     */
+    private String kind;
+
+
+    /**
+     * 服务名称
+     */
+    private String serviceName;
+
+    /**
+     * 服务类型
+     */
+    private String serviceType;
+
+    /**
+     * 是否支持数据库
+     */
+    private boolean supportDatabase;
+
+    /**
+     * 是否支持schema
+     */
+    private boolean supportSchema;
 }

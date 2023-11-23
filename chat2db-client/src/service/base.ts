@@ -1,6 +1,6 @@
-import { extend, ResponseError } from 'umi-request';
+import { extend, ResponseError, type RequestOptionsInit } from 'umi-request';
 import { message } from 'antd';
-import { getLang } from '@/utils/localStorage';
+import { navigate } from '@/utils';
 
 export type IErrorLevel = 'toast' | 'prompt' | 'critical' | false;
 export interface IOptions {
@@ -8,6 +8,9 @@ export interface IOptions {
   mock?: boolean;
   errorLevel?: 'toast' | 'prompt' | 'critical' | false;
   delayTime?: number | true;
+  outside?: boolean;
+  isFullPath?: boolean;
+  dynamicUrl?: boolean;
 }
 
 // TODO:
@@ -31,16 +34,16 @@ const codeMessage: { [errorCode: number]: string } = {
 
 enum ErrorCode {
   /** 需要登录 */
-  NEED_LOGGED_IN = 'NEED_LOGGED_IN',
+  NEED_LOGGED_IN = 'common.needLoggedIn',
 }
 
 const noNeedToastErrorCode = [ErrorCode.NEED_LOGGED_IN];
 
 // yapi mock地址
-const mockUrl = 'https://yapi.alibaba.com/mock/1000160';
+const mockUrl = 'https://yapi.com/mock/1000160';
 
 // 桌面端的服务器地址
-const desktopServiceUrl = `http://127.0.0.1:${process.env.APP_PORT || '10824'}`;
+const desktopServiceUrl = `http://127.0.0.1:${__APP_PORT__ || '10824'}`;
 
 // 非桌面端的服务器地址
 const prodServiceUrl = location.origin;
@@ -51,6 +54,18 @@ const baseURL =
   (location.href.indexOf('dist/index.html') > -1 ? desktopServiceUrl : prodServiceUrl);
 
 window._BaseURL = baseURL;
+// window._BaseURL = 'http://127.0.0.1:8000';
+
+const appGatewayParams = localStorage.getItem('app-gateway-params');
+
+// appGateway 的基本信息
+if (appGatewayParams) {
+  window._appGatewayParams = JSON.parse(appGatewayParams);
+} else {
+  window._appGatewayParams = {};
+}
+
+const outsideUrlPrefix = window._appGatewayParams.baseUrl || 'http://test.sqlgpt.cn/gateway';
 
 const errorHandler = (error: ResponseError, errorLevel: IErrorLevel) => {
   const { response } = error;
@@ -58,6 +73,12 @@ const errorHandler = (error: ResponseError, errorLevel: IErrorLevel) => {
   const errorText = codeMessage[response.status] || response.statusText;
   const { status } = response;
   if (errorLevel === 'toast') {
+    // notification.open({
+    //   type: 'error',
+    //   message: status,
+    //   description: errorText,
+    //   placement: 'topRight',
+    // });
     message.error(`${status}: ${errorText}`);
   }
 };
@@ -78,41 +99,53 @@ request.interceptors.request.use((url, options) => {
       ...options.headers,
     },
   };
-  if (localStorage.getItem('DBHUB')) {
-    myOptions.headers.DBHUB = localStorage.getItem('DBHUB');
+  if (localStorage.getItem('Chat2db')) {
+    myOptions.headers.Chat2db = localStorage.getItem('Chat2db');
   }
-  myOptions.headers.lang = getLang() || 'en-us';
   return {
     options: myOptions,
   };
 });
 
-request.interceptors.response.use(async (response, options) => {
+request.interceptors.response.use(async (response) => {
   const res = await response.clone().json();
-  if (window._ENV === 'desktop') {
-    const DBHUB = response.headers.get('DBHUB') || '';
-    if (DBHUB) {
-      localStorage.setItem('DBHUB', DBHUB);
+  if (__ENV__ === 'desktop') {
+    const Chat2db = response.headers.get('Chat2db') || '';
+    if (Chat2db) {
+      localStorage.setItem('Chat2db', Chat2db);
     }
   }
-  const { errorCode, codeMessage } = res;
+  const { errorCode } = res;
   if (errorCode === ErrorCode.NEED_LOGGED_IN) {
-    // window.location.href = '#/login?callback=' + window.location.hash.substr(1);
-    const callback = window.location.hash.substr(1).split('?')[0];
-    window.location.href = '#/login?' + (callback === '/login' ? '' : `callback=${callback}`);
+    navigate('/login');
+    // const callback = window.location.hash.substr(1).split('?')[0];
+    // window.location.href = '#/login' + (callback === '/login' ? '' : `?callback=${callback}`);
   }
 
   return response;
 });
 
-export default function createRequest<P = void, R = {}>(url: string, options?: IOptions) {
-  const { method = 'get', mock = false, errorLevel = 'toast', delayTime } = options || {};
+export default function createRequest<P = void, R = void>(url: string, options?: IOptions) {
+  // 路由跳转
+  const {
+    method = 'get',
+    mock = false,
+    errorLevel = 'toast',
+    delayTime,
+    outside,
+    isFullPath,
+    dynamicUrl,
+  } = options || {};
 
-  // 是否需要mock
-  const _baseURL = mock ? mockUrl : baseURL;
-  return function (params: P) {
+  return function (params: P, restParams?: RequestOptionsInit) {
+    // 是否需要mock
+    const _baseURL = (mock ? mockUrl : baseURL) || '';
+    // if (url === '/api/rdb/ddl/list') {
+    //   debugger;
+    // }
     // 在url上按照定义规则拼接params
     const paramsInUrl: string[] = [];
+
     const _url = url.replace(/:(.+?)\b/, (_, name: string) => {
       const value = params[name];
       paramsInUrl.push(name);
@@ -140,15 +173,34 @@ export default function createRequest<P = void, R = {}>(url: string, options?: I
         case 'put':
           dataName = 'data';
           break;
+        default:
+          dataName = 'params';
+          break;
       }
 
-      request[method](`${_baseURL}${_url}`, { [dataName]: params })
+      let eventualUrl = outside ? `${outsideUrlPrefix}${_url}` : `${_baseURL}${_url}`;
+      eventualUrl = isFullPath ? url : eventualUrl;
+
+      // 动态的url
+      if (dynamicUrl) {
+        eventualUrl = params as string;
+      }
+
+      request[method](eventualUrl, { [dataName]: params, ...restParams })
         .then((res) => {
           if (!res) return;
-          const { success, errorCode, errorMessage, data } = res;
+          const { success, errorCode, errorMessage, errorDetail, solutionLink, data } = res;
           if (!success && errorLevel === 'toast' && !noNeedToastErrorCode.includes(errorCode)) {
             delayTimeFn(() => {
-              message.error(`${errorCode}: ${errorMessage}`);
+              window._notificationApi({
+                requestUrl: eventualUrl,
+                requestParams: JSON.stringify(params),
+                errorCode,
+                errorMessage,
+                errorDetail,
+                solutionLink,
+              });
+              // message.error(`${errorCode}: ${errorMessage}`);
               reject(`${errorCode}: ${errorMessage}`);
             }, delayTime);
             return;
@@ -159,7 +211,6 @@ export default function createRequest<P = void, R = {}>(url: string, options?: I
           }, delayTime);
         })
         .catch((error) => {
-          console.log('catch error', error);
           delayTimeFn(() => {
             errorHandler(error, errorLevel);
             reject(error);
@@ -170,7 +221,7 @@ export default function createRequest<P = void, R = {}>(url: string, options?: I
 }
 
 // 简单的延时函数
-function delayTimeFn(callback: Function, time: number | true | undefined) {
+function delayTimeFn(callback: () => void, time: number | true | undefined) {
   if (time) {
     const timer = setTimeout(() => {
       callback();
